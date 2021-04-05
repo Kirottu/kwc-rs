@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::prelude::*;
-use std::io::{self, BufReader, StdinLock};
+use std::io::{self, Seek, BufReader, StdinLock};
 use std::path::Path;
 use clap::{Arg, App};
 
@@ -32,7 +32,7 @@ fn main() {
     let matches = App::new("kwc-rs") // Launch options with clap
         .version("1.0")
         .author("KirottuM")
-        .about("Counts words, characters and newlines")
+        .about("Counts words, characters, bytes and newlines")
         .arg(Arg::new("words")
              .about("Output file word count")
              .short('w')
@@ -43,7 +43,7 @@ fn main() {
              .short('m')
              .long("chars")
              .takes_value(false))
-        .arg(Arg::new("newlines")
+        .arg(Arg::new("lines")
              .about("Output file newline count")
              .short('l')
              .long("lines")
@@ -52,11 +52,6 @@ fn main() {
              .about("Output file byte count")
              .short('c')
              .long("bytes")
-             .takes_value(false))
-        .arg(Arg::new("verbosity")
-             .about("Output more verbose information")
-             .short('v')
-             .long("verbose")
              .takes_value(false))
         .arg(Arg::new("files")
              .about("Fiĺes to read from")
@@ -87,7 +82,10 @@ fn main() {
 
         // Open file in read only mode
         let file = match File::open(&path) {
-            Err(why) => panic!("Could not open {} for reading: {}", display, why),
+            Err(why) => {
+                println!("Could not open {} for reading: {}", display, why);
+                std::process::exit(why.raw_os_error().unwrap());
+            },
             Ok(file) => file,
         };
         
@@ -98,32 +96,31 @@ fn main() {
         file_count.w_count = file_count_new.w_count;
         file_count.c_count = file_count_new.c_count;
         file_count.l_count = file_count_new.l_count;
+        file_count.b_count = file_count_new.b_count;
     }
     
     // If no files are inputted, read from stdin
     if files.len() == 0 {
-        // Default FileCount struct
-        let mut file_count = FileCount::new("stdin", 0, 0, 0, 0);
-        
         // Stdin reference and lock
         let stdin = io::stdin();
         let mut handle = stdin.lock();
         
         // Loop through the lines of stdin
-        let file_count_new = loop_thru_file(None, Some(&mut handle));
+        let file_count = loop_thru_file(None, Some(&mut handle));
         
-        // Set the counts to the values from the loop
-        file_count.w_count = file_count_new.w_count;
-        file_count.c_count = file_count_new.c_count;
-        file_count.l_count = file_count_new.l_count;
-
-        println!("{} {} {} {}", file_count.l_count, file_count.w_count, file_count.c_count, file_count.filename);
+        // Print results
+        if matches.is_present("lines") {print!(" {} ", file_count.l_count);}
+        if matches.is_present("words") {print!(" {} ", file_count.w_count);}
+        if matches.is_present("characters") {print!(" {} ", file_count.c_count);}
+        if matches.is_present("bytes") {print!(" {} ", file_count.b_count);}
+        println!("{}", file_count.filename);
     }
     else { 
         // Variables to store the total values from all files 
         let mut w_count_total: i32 = 0;
         let mut c_count_total: i32 = 0;
         let mut l_count_total: i32 = 0;
+        let mut b_count_total: i32 = 0;
         
         // Loop through each file to output its values, and increment total values
         for file_count in files.iter()
@@ -131,31 +128,41 @@ fn main() {
             w_count_total += file_count.w_count;
             c_count_total += file_count.c_count;
             l_count_total += file_count.l_count;
-            println!("{} {} {} {}", file_count.l_count, file_count.w_count, file_count.c_count, file_count.filename);
+            b_count_total += file_count.b_count;
+            
+            if matches.is_present("lines") {print!(" {} ", file_count.l_count);}
+            if matches.is_present("words") {print!(" {} ", file_count.w_count);}
+            if matches.is_present("characters") {print!(" {} ", file_count.c_count);}
+            if matches.is_present("bytes") {print!(" {} ", file_count.b_count);}
+            println!("{}", file_count.filename);
         }
         
         // Do not print total in case there is only 1 file
         if files.len() > 1 {
-            println!("{} {} {} Total", l_count_total, w_count_total, c_count_total);
+            if matches.is_present("lines") {print!(" {} ", l_count_total);}
+            if matches.is_present("words") {print!(" {} ", w_count_total);}
+            if matches.is_present("characters") {print!(" {} ", c_count_total);}
+            if matches.is_present("bytes") {print!(" {} ", b_count_total);}
+            println!("Total");
         }
     }
 }
 
-fn loop_thru_string(line: &str, counts: &mut (i32, i32, i32, i32))
+fn loop_thru_string(line: &str, file_count: &mut FileCount)
 {
     // Increment both newline and character count due to newline characters
-    counts.2 += 1; 
-    counts.1 += 1;
-    
+    file_count.c_count += 1;
+    file_count.l_count += 1;
+
     // Set last character to a null character
     let mut last_c = '\0';
     
     // Loop through characters of the current line
     for c in line.chars() {
-        counts.1 += 1;
+        file_count.c_count += 1;
         
         if (last_c == ' ' || last_c == '\0') && c != ' ' {
-            counts.0 += 1; // Increment word count if those conditions are met
+            file_count.w_count += 1; // Increment word count if those conditions are met
         }
 
         last_c = c; // Make sure the last_c character is the last character
@@ -164,28 +171,50 @@ fn loop_thru_string(line: &str, counts: &mut (i32, i32, i32, i32))
 
 fn loop_thru_file(f: Option<&File>, stdin: Option<&mut StdinLock>) -> FileCount
 {
-    let mut counts = (0, 0, 0, 0);
+    let mut file_count = FileCount::new("", 0, 0, 0, 0);
 
     // Same code for 2 loops due to type mismatch, sigh
-    if let Some(file) = f {
-        for line in BufReader::new(file).lines() {
+    if let Some(mut file) = f {
+        for line in BufReader::new(file).lines() { // Loop through the lines
             if let Ok(line_str) = line {
-                loop_thru_string(&line_str, &mut counts);
+                loop_thru_string(&line_str, &mut file_count); // Count a single line
             }
         }
-        for _ in file.bytes() {
-            counts.3 += 1;
+        // Reset read position for byte calculation
+        match file.seek(io::SeekFrom::Start(0)) {
+            Err(why) => {
+                println!("File read position setting failed: {}", why);
+                std::process::exit(why.raw_os_error().unwrap());
+            },
+            Ok(_) => ()
+        } 
+
+        for byte in file.bytes() { // Count the bytes
+            if let Ok(_) = byte { // Error checking
+                file_count.b_count += 1;
+            }
         }
     }
     else if let Some(file) = stdin {
-        for line in file.lines() {
-            if let Ok(line_str) = line {
-                loop_thru_string(&line_str, &mut counts);
-            }
+        let mut buf = String::new(); // Buffer to store stdin due to StdinLock not having Seek trait
+
+        match file.read_to_string(&mut buf) { // Read stdin into the buffer
+            Err(why) => {
+                println!("Stdin reading to buffer failed: {}", why);
+                std::process::exit(why.raw_os_error().unwrap());
+            },
+            Ok(_) => ()
         }
-        for _ in file.bytes() {
-            counts.3 += 1;
+
+        for line in buf.lines() { // Loop through the lines
+            loop_thru_string(&line, &mut file_count); // Count a single line
+        }
+
+        for _ in buf.bytes() { // Count the bytes
+            file_count.b_count += 1;
         }
     }
-    FileCount::new("", counts.0, counts.1, counts.2, counts.3)
+    
+    // Return the calculated values
+    file_count
 }
