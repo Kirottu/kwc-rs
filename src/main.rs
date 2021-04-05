@@ -68,7 +68,7 @@ fn main() {
         Some(iterator) => iterator,
         None => clap::Values::default(),
     }; 
-    
+    // yoo 
     // Loop thru all the file options to add to the vector
     for file in iterator {
         files.push(FileCount::new(file, 0, 0, 0, 0));
