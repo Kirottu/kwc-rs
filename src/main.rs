@@ -205,7 +205,6 @@ fn loop_thru_file(f: Option<&File>, stdin: Option<&mut StdinLock>) -> FileCount
             },
             Ok(_) => ()
         }
-
         for line in buf.lines() { // Loop through the lines
             loop_thru_string(&line, &mut file_count); // Count a single line
         }
